@@ -392,6 +392,16 @@ class CapstoneDesktopApp:
             )
             return
 
+        if technique_key == "brute_force" and len(self.students) > 12:
+            confirmed = messagebox.askyesno(
+                "Performance warning",
+                f"Brute Force with {len(self.students)} students may take a very long time.\n\n"
+                "Consider using Linear Programming or Genetic Algorithm for faster results.\n\n"
+                "Continue anyway?",
+            )
+            if not confirmed:
+                return
+
         try:
             result = optimize_assignments(self.students, constraints, technique=technique_key)
         except Exception as exc:

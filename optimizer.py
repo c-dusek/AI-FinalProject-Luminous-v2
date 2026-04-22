@@ -9,7 +9,7 @@ SUPPORTED_TECHNIQUES = {
     "genetic_algorithm": "Genetic Algorithm",
 }
 
-_BRUTE_FORCE_STUDENT_LIMIT = 12
+_BRUTE_FORCE_STUDENT_LIMIT = 80
 
 
 def _safe(name: str) -> str:
