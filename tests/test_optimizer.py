@@ -54,9 +54,9 @@ def test_stats_populated():
 
 
 def test_infeasible_returns_error():
-    # 5 students, but Beta min=4 AND Gamma min=4 → need 8 seats minimum, only 5 students
+    # 5 students, but total capacity is only 3, so not everyone can be assigned.
     students = [{'name': f'S{i}', 'choices': ['Alpha']} for i in range(5)]
-    projects = {'Alpha': {'min': 0, 'max': 5}, 'Beta': {'min': 4, 'max': 5}, 'Gamma': {'min': 4, 'max': 5}}
+    projects = {'Alpha': {'min': 0, 'max': 1}, 'Beta': {'min': 2, 'max': 2}, 'Gamma': {'min': 0, 'max': 0}}
     result = optimize_assignments(students, projects)
     assert 'error' in result
 
@@ -82,3 +82,19 @@ def test_project_groups_match_assignments():
     result = optimize_assignments(STUDENTS, PROJECTS)
     all_in_groups = [m for members in result['project_groups'].values() for m in members]
     assert sorted(all_in_groups) == sorted(result['assignments'].keys())
+
+
+def test_project_below_min_can_close():
+    students = [
+        {'name': 'Alice', 'choices': ['Alpha', 'Beta']},
+        {'name': 'Bob', 'choices': ['Alpha', 'Beta']},
+        {'name': 'Carol', 'choices': ['Alpha', 'Beta']},
+    ]
+    projects = {
+        'Alpha': {'min': 2, 'max': 3},
+        'Beta': {'min': 2, 'max': 3},
+    }
+    result = optimize_assignments(students, projects)
+    assert 'error' not in result
+    assert sorted(result['project_groups'].keys()) == ['Alpha']
+    assert len(result['project_groups']['Alpha']) == 3

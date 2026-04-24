@@ -65,6 +65,12 @@ def _build_result(students: list, assignment_list: list, all_projects: list, sco
     return {"assignments": assignments, "project_groups": project_groups, "stats": stats}
 
 
+def _project_count_is_valid(count: int, limits: dict, total_students: int) -> bool:
+    min_cap = max(0, limits.get("min", 0))
+    max_cap = limits.get("max", total_students)
+    return count == 0 or min_cap <= count <= max_cap
+
+
 def _solve_brute_force(students: list, constraints: dict, scores: dict, all_projects: list) -> dict:
     if len(students) > _BRUTE_FORCE_STUDENT_LIMIT:
         return {
@@ -79,7 +85,7 @@ def _solve_brute_force(students: list, constraints: dict, scores: dict, all_proj
     def backtrack(idx: int, current: list, counts: dict) -> None:
         if idx == len(students):
             for proj, limits in constraints.items():
-                if counts.get(proj, 0) < limits.get("min", 0):
+                if not _project_count_is_valid(counts.get(proj, 0), limits, len(students)):
                     return
             score = sum(scores[students[i]["name"]][current[i]] for i in range(len(students)))
             if score > best["score"]:
@@ -131,7 +137,7 @@ def _solve_genetic(
         for j, proj in enumerate(all_projects):
             min_c = constraints[proj].get("min", 0)
             max_c = constraints[proj].get("max", n)
-            if counts[j] < min_c:
+            if 0 < counts[j] < min_c:
                 penalty += (min_c - counts[j]) * 1000
             if counts[j] > max_c:
                 penalty += (counts[j] - max_c) * 1000
@@ -181,7 +187,7 @@ def _solve_genetic(
     for proj in best:
         counts[proj] += 1
     for proj, limits in constraints.items():
-        if counts[proj] < limits.get("min", 0) or counts[proj] > limits.get("max", n):
+        if not _project_count_is_valid(counts[proj], limits, n):
             return {
                 "error": (
                     "Genetic Algorithm could not find a feasible solution satisfying all seat constraints. "
@@ -255,8 +261,9 @@ def optimize_assignments(students: list, constraints: dict, technique: str = "li
         min_cap = max(0, constraints[proj].get("min", 0))
         max_cap = constraints[proj].get("max", len(students))
         proj_load = pulp.lpSum(x[s["name"]][proj] for s in students)
-        prob += proj_load >= min_cap, f"min_{_safe(proj)}"
-        prob += proj_load <= max_cap, f"max_{_safe(proj)}"
+        is_open = pulp.LpVariable(f"open_{_safe(proj)}", cat="Binary")
+        prob += proj_load >= min_cap * is_open, f"min_{_safe(proj)}"
+        prob += proj_load <= max_cap * is_open, f"max_{_safe(proj)}"
 
     prob.solve(pulp.PULP_CBC_CMD(msg=0))
 

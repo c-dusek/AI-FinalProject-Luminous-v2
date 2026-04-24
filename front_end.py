@@ -57,6 +57,7 @@ class CapstoneDesktopApp:
         self.status_var = tk.StringVar(value="Upload a student preference file to begin.")
         self.summary_var = tk.StringVar(value="Results will appear here after you run the optimizer.")
         self.technique_var = tk.StringVar(value=first_label)
+        self.default_min_var = tk.StringVar(value="2")
         self.default_max_var = tk.StringVar(value="5")
 
         self._configure_style()
@@ -201,9 +202,12 @@ class CapstoneDesktopApp:
 
         defaults = ttk.Frame(card, style="Card.TFrame")
         defaults.grid(row=4, column=0, sticky="ew", pady=(0, 12))
-        ttk.Label(defaults, text="Default max seats", style="CardBody.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Entry(defaults, textvariable=self.default_max_var, width=8).grid(row=0, column=1, padx=(10, 10))
-        ttk.Button(defaults, text="Apply To All", command=self._apply_default_max).grid(row=0, column=2)
+        ttk.Label(defaults, text="Default min seats", style="CardBody.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Entry(defaults, textvariable=self.default_min_var, width=8).grid(row=0, column=1, padx=(10, 10))
+        ttk.Button(defaults, text="Apply To All", command=self._apply_default_min).grid(row=0, column=2)
+        ttk.Label(defaults, text="Default max seats", style="CardBody.TLabel").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(defaults, textvariable=self.default_max_var, width=8).grid(row=1, column=1, padx=(10, 10), pady=(8, 0))
+        ttk.Button(defaults, text="Apply To All", command=self._apply_default_max).grid(row=1, column=2, pady=(8, 0))
 
         action_row = ttk.Frame(card, style="Card.TFrame")
         action_row.grid(row=5, column=0, sticky="w", pady=(6, 8))
@@ -319,6 +323,9 @@ class CapstoneDesktopApp:
                 if project in interest:
                     interest[project] += 1
 
+        default_min = self._safe_non_negative_int(self.default_min_var.get())
+        if default_min is None:
+            default_min = 2
         default_max = self._safe_positive_int(self.default_max_var.get(), fallback=5)
 
         for row_index, project in enumerate(self.projects, start=1):
@@ -326,7 +333,7 @@ class CapstoneDesktopApp:
             row.grid(row=row_index, column=0, sticky="ew", pady=4)
             row.columnconfigure(0, weight=1)
 
-            min_var = tk.StringVar(value="0")
+            min_var = tk.StringVar(value=str(default_min))
             max_var = tk.StringVar(value=str(default_max))
 
             ttk.Label(row, text=project, style="CardBody.TLabel").grid(row=0, column=0, sticky="w")
@@ -335,6 +342,17 @@ class CapstoneDesktopApp:
             ttk.Entry(row, textvariable=max_var, width=8).grid(row=0, column=3, padx=12)
 
             self.project_inputs[project] = {"min": min_var, "max": max_var}
+
+    def _apply_default_min(self) -> None:
+        default_min = self._safe_non_negative_int(self.default_min_var.get())
+        if default_min is None:
+            messagebox.showwarning("Invalid value", "Default min seats must be a non-negative integer.")
+            return
+
+        for vars_for_project in self.project_inputs.values():
+            vars_for_project["min"].set(str(default_min))
+
+        self.status_var.set(f"Applied min seats = {default_min} to all projects.")
 
     def _apply_default_max(self) -> None:
         default_max = self._safe_positive_int(self.default_max_var.get(), fallback=None)
@@ -384,11 +402,11 @@ class CapstoneDesktopApp:
             messagebox.showerror("Technique error", "No supported optimization technique is selected.")
             return
 
-        total_min = sum(item["min"] for item in constraints.values())
-        if total_min > len(self.students):
+        total_max = sum(item["max"] for item in constraints.values())
+        if total_max < len(self.students):
             messagebox.showerror(
                 "Constraint error",
-                f"Project minimums total {total_min}, but only {len(self.students)} students are loaded.",
+                f"Project maximums total {total_max}, but {len(self.students)} students are loaded.",
             )
             return
 
