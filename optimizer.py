@@ -94,13 +94,23 @@ def _solve_brute_force(students: list, constraints: dict, scores: dict, all_proj
             return
 
         sname = students[idx]["name"]
+        remaining = len(students) - idx - 1  # students left after this one
         for proj in all_projects:
-            if counts.get(proj, 0) < constraints[proj].get("max", len(students)):
-                current.append(proj)
-                counts[proj] = counts.get(proj, 0) + 1
-                backtrack(idx + 1, current, counts)
-                current.pop()
-                counts[proj] -= 1
+            cur = counts.get(proj, 0)
+            max_cap = constraints[proj].get("max", len(students))
+            if cur >= max_cap:
+                continue
+            # Prune: if adding this student would make it impossible for a
+            # project with a min constraint to ever reach its minimum,
+            # skip this branch early.
+            min_cap = constraints[proj].get("min", 0)
+            if min_cap > 0 and cur + 1 < min_cap and remaining < min_cap - cur - 1:
+                continue
+            current.append(proj)
+            counts[proj] = cur + 1
+            backtrack(idx + 1, current, counts)
+            current.pop()
+            counts[proj] -= 1
 
     backtrack(0, [], {})
 
@@ -230,6 +240,17 @@ def optimize_assignments(students: list, constraints: dict, technique: str = "li
     all_projects = list(constraints.keys())
     n_choices = max((len(s["choices"]) for s in students), default=6)
     scores = _build_scores(students, all_projects, n_choices)
+
+    # Fast pre-check: total max must accommodate every student.
+    total_max = sum(c.get("max", len(students)) for c in constraints.values())
+    if total_max < len(students):
+        return {
+            "error": (
+                f"Total maximum seats across all projects ({total_max}) is less than "
+                f"the number of students ({len(students)}). "
+                "Raise the maximum seat counts before running."
+            )
+        }
 
     if technique == "brute_force":
         return _solve_brute_force(students, constraints, scores, all_projects)

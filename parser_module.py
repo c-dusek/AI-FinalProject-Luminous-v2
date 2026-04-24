@@ -68,8 +68,15 @@ def parse_preferences(content: str):
 
 
 def _detect_delimiter(content: str) -> str:
-    first_line = content.split("\n")[0]
-    counts = {",": first_line.count(","), "\t": first_line.count("\t"), ";": first_line.count(";")}
+    # Sample up to the first 5 non-empty lines so a sparse header doesn't
+    # throw off the count.
+    lines = [ln for ln in content.split("\n") if ln.strip()][:5]
+    sample = "\n".join(lines)
+    counts = {
+        ",":  sample.count(","),
+        "\t": sample.count("\t"),
+        ";":  sample.count(";"),
+    }
     return max(counts, key=counts.get)
 
 
