@@ -151,7 +151,19 @@ def _solve_genetic(
         candidates = random.sample(range(len(pop)), k)
         return pop[max(candidates, key=lambda i: fits[i])]
 
-    population = [random_chrom() for _ in range(pop_size)]
+    def greedy_chrom() -> list:
+        chrom = []
+        counts = {p: 0 for p in all_projects}
+        for s in students:
+            for choice in s["choices"] + [p for p in all_projects if p not in s["choices"]]:
+                if counts[choice] < constraints[choice].get("max", n):
+                    chrom.append(choice)
+                    counts[choice] += 1
+                    break
+        return chrom
+
+    n_greedy = max(1, pop_size // 5)
+    population = [greedy_chrom() for _ in range(n_greedy)] + [random_chrom() for _ in range(pop_size - n_greedy)]
 
     for _ in range(generations):
         fits = [fitness(c) for c in population]
