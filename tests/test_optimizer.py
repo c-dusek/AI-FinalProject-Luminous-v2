@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from optimizer import optimize_assignments
 
 
+# Shared fixtures model a small but non-trivial assignment scenario.
 PROJECTS = {
     'Alpha': {'min': 1, 'max': 5},
     'Beta':  {'min': 1, 'max': 5},

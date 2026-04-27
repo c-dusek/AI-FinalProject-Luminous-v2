@@ -1,3 +1,5 @@
+"""Parsing helpers for student preference files."""
+
 import csv
 import io
 
@@ -20,6 +22,8 @@ def parse_preferences(content: str):
         students : list of {"name": str, "choices": [str, ...]}
         projects : set of all project name strings
     """
+    # Trim surrounding blank space so delimiter detection and row counting work
+    # the same for copied text and exported files.
     content = content.strip()
     if not content:
         raise ValueError("File is empty")
@@ -34,6 +38,7 @@ def parse_preferences(content: str):
     header = [h.strip() for h in rows[0]]
     name_col = _find_name_column(header)
 
+    # Every non-name column is treated as another ranked preference column.
     choice_cols = [i for i in range(len(header)) if i != name_col]
 
     students = []
@@ -41,6 +46,7 @@ def parse_preferences(content: str):
     seen_names: dict = {}
 
     for row in rows[1:]:
+        # Pad short rows so missing trailing choices do not misalign columns.
         while len(row) < len(header):
             row.append("")
 
@@ -68,6 +74,7 @@ def parse_preferences(content: str):
 
 
 def _detect_delimiter(content: str) -> str:
+    """Pick the most likely delimiter from a small sample of populated lines."""
     # Sample up to the first 5 non-empty lines so a sparse header doesn't
     # throw off the count.
     lines = [ln for ln in content.split("\n") if ln.strip()][:5]
@@ -81,6 +88,7 @@ def _detect_delimiter(content: str) -> str:
 
 
 def _find_name_column(header: list) -> int:
+    """Locate the name column, defaulting to the first column when unsure."""
     name_keywords = {"name", "student", "student name", "studentname"}
     for i, h in enumerate(header):
         if h.lower().strip() in name_keywords:

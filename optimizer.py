@@ -1,5 +1,8 @@
-import re
+"""Optimization strategies for assigning students to projects."""
+
 import random
+import re
+
 import pulp
 
 
@@ -18,6 +21,7 @@ def _safe(name: str) -> str:
 
 
 def _build_scores(students: list, all_projects: list, n_choices: int) -> dict:
+    """Convert ranked choices into a score table shared by each solver."""
     scores: dict = {}
     for student in students:
         sname = student["name"]
@@ -32,6 +36,7 @@ def _build_scores(students: list, all_projects: list, n_choices: int) -> dict:
 
 
 def _build_result(students: list, assignment_list: list, all_projects: list, scores: dict, technique: str) -> dict:
+    """Build the result structure consumed by the UI and CSV exports."""
     assignments: dict = {}
     for student, proj in zip(students, assignment_list):
         sname = student["name"]
@@ -66,12 +71,14 @@ def _build_result(students: list, assignment_list: list, all_projects: list, sco
 
 
 def _project_count_is_valid(count: int, limits: dict, total_students: int) -> bool:
+    """A project is valid if it is closed or it satisfies its min/max limits."""
     min_cap = max(0, limits.get("min", 0))
     max_cap = limits.get("max", total_students)
     return count == 0 or min_cap <= count <= max_cap
 
 
 def _solve_brute_force(students: list, constraints: dict, scores: dict, all_projects: list) -> dict:
+    """Enumerate assignments with backtracking for very small class sizes."""
     if len(students) > _BRUTE_FORCE_STUDENT_LIMIT:
         return {
             "error": (
@@ -84,6 +91,8 @@ def _solve_brute_force(students: list, constraints: dict, scores: dict, all_proj
 
     def backtrack(idx: int, current: list, counts: dict) -> None:
         if idx == len(students):
+            # Validate the final seat counts here so projects are allowed to stay
+            # completely unused when their minimum is zero.
             for proj, limits in constraints.items():
                 if not _project_count_is_valid(counts.get(proj, 0), limits, len(students)):
                     return
@@ -133,10 +142,13 @@ def _solve_genetic(
     generations: int = 300,
     pop_size: int = 150,
 ) -> dict:
+    """Search for a good feasible assignment using an evolutionary heuristic."""
     n = len(students)
     proj_idx = {p: i for i, p in enumerate(all_projects)}
 
     def fitness(chrom: list) -> float:
+        # Heavy penalties push the search toward feasible seat counts while
+        # still rewarding assignments that satisfy higher-ranked preferences.
         counts = [0] * len(all_projects)
         score = 0.0
         for i, s in enumerate(students):
@@ -168,6 +180,8 @@ def _solve_genetic(
         return pop[max(candidates, key=lambda i: fits[i])]
 
     def greedy_chrom() -> list:
+        # Seed part of the population with preference-aware candidates so the
+        # search does not start entirely from random assignments.
         chrom = []
         counts = {p: 0 for p in all_projects}
         for s in students:
@@ -258,7 +272,8 @@ def optimize_assignments(students: list, constraints: dict, technique: str = "li
     if technique == "genetic_algorithm":
         return _solve_genetic(students, constraints, scores, all_projects)
 
-    # --- Linear Programming (default) ---
+    # Linear Programming is the default because it finds an exact optimum for
+    # the score model while remaining fast for typical class sizes.
     prob = pulp.LpProblem("Capstone_Matching", pulp.LpMaximize)
 
     x: dict = {}
@@ -282,6 +297,8 @@ def optimize_assignments(students: list, constraints: dict, technique: str = "li
         min_cap = max(0, constraints[proj].get("min", 0))
         max_cap = constraints[proj].get("max", len(students))
         proj_load = pulp.lpSum(x[s["name"]][proj] for s in students)
+        # This binary "open" switch lets the solver either leave a project empty
+        # or enforce both bounds when the project is used.
         is_open = pulp.LpVariable(f"open_{_safe(proj)}", cat="Binary")
         prob += proj_load >= min_cap * is_open, f"min_{_safe(proj)}"
         prob += proj_load <= max_cap * is_open, f"max_{_safe(proj)}"
@@ -299,6 +316,7 @@ def optimize_assignments(students: list, constraints: dict, technique: str = "li
             }
         return {"error": f"Solver returned status: {pulp.LpStatus[prob.status]}"}
 
+    # Collapse the decision matrix back to one assigned project per student.
     assignment_list: list = []
     for student in students:
         sname = student["name"]
