@@ -31,7 +31,8 @@ _RANK_ROW: dict[str, tuple[str, str]] = {
     "5": ("#ffedd5", "#9a3412"),
     "6": ("#fee2e2", "#991b1b"),
 }
-_OUT_BG, _OUT_FG = "#f3f4f6", _T2
+_OUT_BG,  _OUT_FG  = "#f3f4f6", _T2
+_LOCK_ROW_BG, _LOCK_ROW_FG = "#ccfbf1", "#0f766e"  # teal — locked assignments
 
 # sidebar descriptions per algorithm
 _ALGO_INFO: dict[str, str] = {
@@ -253,8 +254,9 @@ class CapstoneDesktopApp:
         self.projects:       list[str]                            = []
         self.last_result:    dict | None                          = None
         self.project_inputs: dict[str, dict[str, tk.StringVar]]  = {}
-        self._running        = False
-        self._spinner_idx    = 0
+        self._running           = False
+        self._spinner_idx       = 0
+        self.locked_assignments: dict[str, str] = {}
 
         supported = sorted(SUPPORTED_TECHNIQUES.items(), key=lambda kv: kv[1])
         self._tech_labels    = {label: key for key, label in supported}
@@ -607,11 +609,22 @@ class CapstoneDesktopApp:
         tab.rowconfigure(1, weight=1)
         nb.add(tab, text="  Assignments  ")
 
+        # header: summary label + clear-locks button
+        hdr = ttk.Frame(tab, style="Card.TFrame")
+        hdr.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        hdr.columnconfigure(0, weight=1)
+
         self._assign_summary = ttk.Label(
-            tab, text="Run the optimizer to see results.",
-            style="CardMeta.TLabel", wraplength=480, justify="left",
+            hdr, text="Run the optimizer to see results.",
+            style="CardMeta.TLabel", wraplength=380, justify="left",
         )
-        self._assign_summary.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self._assign_summary.grid(row=0, column=0, sticky="w")
+
+        self._clear_locks_btn = ttk.Button(
+            hdr, text="Clear locks (0)", command=self._clear_locks,
+        )
+        self._clear_locks_btn.grid(row=0, column=1, padx=(8, 0))
+        self._clear_locks_btn.grid_remove()   # hidden until locks exist
 
         holder = ttk.Frame(tab, style="Card.TFrame")
         holder.grid(row=1, column=0, sticky="nsew")
@@ -628,6 +641,10 @@ class CapstoneDesktopApp:
         self.assign_tree.tag_configure("outside", background=_OUT_BG, foreground=_OUT_FG)
         for key, (bg, fg) in _RANK_ROW.items():
             self.assign_tree.tag_configure(f"rank_{key}", background=bg, foreground=fg)
+        self.assign_tree.tag_configure(
+            "locked", background=_LOCK_ROW_BG, foreground=_LOCK_ROW_FG,
+        )
+        self.assign_tree.bind("<Button-3>", self._right_click_assign)
 
     def _build_groups_tab(self, nb: ttk.Notebook) -> None:
         tab = ttk.Frame(nb, style="Card.TFrame", padding=6)
@@ -735,6 +752,8 @@ class CapstoneDesktopApp:
 
         self._populate_preview()
         self._populate_constraints()
+        self.locked_assignments.clear()
+        self._update_lock_button()
         _clear(self.assign_tree)
         _clear(self.groups_tree)
         self._reset_stats()
@@ -886,7 +905,8 @@ class CapstoneDesktopApp:
 
         threading.Thread(
             target=self._do_optimize,
-            args=(self.students[:], constraints, technique_key),
+            args=(self.students[:], constraints, technique_key,
+                  dict(self.locked_assignments)),
             daemon=True,
         ).start()
 
@@ -895,9 +915,12 @@ class CapstoneDesktopApp:
         students: list,
         constraints: dict,
         technique: str,
+        locked: dict,
     ) -> None:
         try:
-            result = optimize_assignments(students, constraints, technique=technique)
+            result = optimize_assignments(
+                students, constraints, technique=technique, locked=locked,
+            )
         except Exception as exc:
             result = {"error": str(exc)}
         self.root.after(0, self._on_optimize_done, result)
@@ -936,25 +959,118 @@ class CapstoneDesktopApp:
     def _stop_spinner(self) -> None:
         self._spin_lbl.configure(text="")
 
-    # ── render results ────────────────────────────────────────────────────────
+    # ── lock / unlock assignments ─────────────────────────────────────────────
 
-    def _render_results(self, result: dict) -> None:
-        assignments = result.get("assignments", {})
-        groups      = result.get("project_groups", {})
-        stats       = result.get("stats", {})
+    def _right_click_assign(self, event: tk.Event) -> None:
+        row = self.assign_tree.identify_row(event.y)
+        if not row:
+            return
+        self.assign_tree.selection_set(row)
+        sname = self.assign_tree.set(row, "student")
+        proj  = self.assign_tree.set(row, "project")
 
-        # ── Assignments tab ────────────────────────────────────────────
+        menu = tk.Menu(self.root, tearoff=False)
+        if sname in self.locked_assignments:
+            menu.add_command(
+                label=f"Unlock  '{sname}'",
+                command=lambda: self._unlock_assignment(sname),
+            )
+        else:
+            menu.add_command(
+                label=f"Lock  '{sname}'  →  {proj}",
+                command=lambda: self._lock_assignment(sname, proj),
+            )
+        if self.locked_assignments:
+            menu.add_separator()
+            menu.add_command(label="Clear all locks", command=self._clear_locks)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _lock_assignment(self, sname: str, proj: str) -> None:
+        self.locked_assignments[sname] = proj
+        self._update_lock_button()
+        self._refresh_assignments_display()
+        n = len(self.locked_assignments)
+        self.status_var.set(
+            f"Locked {sname} → {proj}.  "
+            f"{n} lock(s) active — will be honored on next Run."
+        )
+
+    def _unlock_assignment(self, sname: str) -> None:
+        self.locked_assignments.pop(sname, None)
+        self._update_lock_button()
+        self._refresh_assignments_display()
+        n = len(self.locked_assignments)
+        self.status_var.set(
+            f"Unlocked {sname}.  {n} lock(s) remaining." if n
+            else f"Unlocked {sname}."
+        )
+
+    def _clear_locks(self) -> None:
+        self.locked_assignments.clear()
+        self._update_lock_button()
+        self._refresh_assignments_display()
+        self.status_var.set("All locks cleared.")
+
+    def _update_lock_button(self) -> None:
+        n = len(self.locked_assignments)
+        if n:
+            self._clear_locks_btn.configure(text=f"Clear locks ({n})")
+            self._clear_locks_btn.grid()
+        else:
+            self._clear_locks_btn.grid_remove()
+
+    def _refresh_assignments_display(self) -> None:
+        if not self.last_result:
+            return
+        assignments = self.last_result.get("assignments", {})
+        stats       = self.last_result.get("stats", {})
+
         _clear(self.assign_tree)
         for sname in sorted(assignments):
-            info    = assignments[sname]
-            rank    = info.get("rank")
-            tag     = f"rank_{rank}" if rank and str(rank) in _RANK_ROW else "outside"
-            rank_tx = f"Choice {rank}" if rank else "Outside choices"
+            info      = assignments[sname]
+            rank      = info.get("rank")
+            is_locked = sname in self.locked_assignments
+            rank_tx   = f"Choice {rank}" if rank else "Outside choices"
+            if is_locked:
+                rank_tx += "  (locked)"
+                tag = "locked"
+            else:
+                tag = f"rank_{rank}" if rank and str(rank) in _RANK_ROW else "outside"
             self.assign_tree.insert(
                 "", "end",
                 values=(sname, info["project"], rank_tx),
                 tags=(tag,),
             )
+
+        rank_counts  = stats.get("rank_counts", {})
+        unranked     = stats.get("unranked_count", 0)
+        total        = stats.get("total_students", len(assignments))
+        first_choice = rank_counts.get("1", 0)
+        top_three    = sum(rank_counts.get(str(r), 0) for r in range(1, 4))
+        tech_label   = stats.get("technique_label", self.technique_var.get())
+        n_locked     = len(self.locked_assignments)
+        lock_note    = f"   {n_locked} locked." if n_locked else ""
+        self._assign_summary.configure(
+            text=(
+                f"{tech_label} — {total} students assigned.   "
+                f"1st choice: {first_choice}   "
+                f"Top-3: {top_three}   "
+                f"Outside prefs: {unranked}   "
+                f"Right-click a row to lock/unlock.{lock_note}"
+            )
+        )
+
+    # ── render results ────────────────────────────────────────────────────────
+
+    def _render_results(self, result: dict) -> None:
+        groups = result.get("project_groups", {})
+        stats  = result.get("stats", {})
+
+        # ── Assignments tab ────────────────────────────────────────────
+        self._refresh_assignments_display()
 
         # ── Groups tab ────────────────────────────────────────────────
         _clear(self.groups_tree)
@@ -966,6 +1082,7 @@ class CapstoneDesktopApp:
             )
 
         # ── Stats tab ────────────────────────────────────────────────
+        assignments  = result.get("assignments", {})
         rank_counts  = stats.get("rank_counts", {})
         unranked     = stats.get("unranked_count", 0)
         total        = stats.get("total_students", len(assignments))
@@ -987,17 +1104,6 @@ class CapstoneDesktopApp:
         self._stat_footer.configure(
             text=f"Algorithm: {tech_label}   ·   Objective score: {obj}   "
                  f"(higher = more students matched to preferred projects)"
-        )
-
-        # summary line in Assignments tab header
-        self._assign_summary.configure(
-            text=(
-                f"{tech_label} — {total} students assigned.   "
-                f"1st choice: {first_choice}   "
-                f"Top-3: {top_three}   "
-                f"Outside prefs: {unranked}   "
-                f"Click any column header to sort."
-            )
         )
 
     def _reset_stats(self) -> None:

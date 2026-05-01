@@ -30,7 +30,6 @@ def _build_scores(students: list, all_projects: list, n_choices: int) -> dict:
                 scores[sname][proj] = 0
     return scores
 
-
 def _build_result(students: list, assignment_list: list, all_projects: list, scores: dict, technique: str) -> dict:
     assignments: dict = {}
     for student, proj in zip(students, assignment_list):
@@ -208,57 +207,7 @@ def _solve_genetic(
     return _build_result(students, best, all_projects, scores, "genetic_algorithm")
 
 
-def optimize_assignments(students: list, constraints: dict, technique: str = "linear_programming") -> dict:
-    """
-    Assign each student to exactly one capstone project to maximize total preference score.
-
-    Scoring:
-        Rank 1 (top choice) → N points  (N = max choices any student submitted)
-        Rank 2              → N-1 points
-        ...
-        Rank N              → 1 point
-        Unranked project    → 0 points
-
-    Args:
-        students    : list of {"name": str, "choices": [str, ...]}  (ordered preference)
-        constraints : {"Project Name": {"min": int, "max": int}, ...}
-        technique   : "linear_programming" | "brute_force" | "genetic_algorithm"
-
-    Returns:
-        dict with keys: assignments, project_groups, stats
-        or dict with key: error (on infeasibility)
-    """
-    if technique not in SUPPORTED_TECHNIQUES:
-        supported = ", ".join(SUPPORTED_TECHNIQUES.values())
-        return {
-            "error": (
-                f"The backend currently supports: {supported}. "
-                f"Requested technique '{technique}' is not available."
-            )
-        }
-
-    all_projects = list(constraints.keys())
-    n_choices = max((len(s["choices"]) for s in students), default=6)
-    scores = _build_scores(students, all_projects, n_choices)
-
-    # Fast pre-check: total max must accommodate every student.
-    total_max = sum(c.get("max", len(students)) for c in constraints.values())
-    if total_max < len(students):
-        return {
-            "error": (
-                f"Total maximum seats across all projects ({total_max}) is less than "
-                f"the number of students ({len(students)}). "
-                "Raise the maximum seat counts before running."
-            )
-        }
-
-    if technique == "brute_force":
-        return _solve_brute_force(students, constraints, scores, all_projects)
-
-    if technique == "genetic_algorithm":
-        return _solve_genetic(students, constraints, scores, all_projects)
-
-    # --- Linear Programming (default) ---
+def _solve_lp(students: list, constraints: dict, scores: dict, all_projects: list) -> dict:
     prob = pulp.LpProblem("Capstone_Matching", pulp.LpMaximize)
 
     x: dict = {}
@@ -310,4 +259,165 @@ def optimize_assignments(students: list, constraints: dict, technique: str = "li
 
     result = _build_result(students, assignment_list, all_projects, scores, "linear_programming")
     result["stats"]["objective_value"] = round(pulp.value(prob.objective), 2)
+    return result
+
+
+def _merge_locked_result(
+    result: dict,
+    locked_students: list,
+    locked: dict,
+    all_students: list,
+    scores: dict,
+    technique: str,
+) -> dict:
+    """Fold pre-fixed locked assignments into a partial optimizer result and recompute stats."""
+    assignments = result["assignments"]
+    groups      = result["project_groups"]
+
+    for s in locked_students:
+        sname = s["name"]
+        proj  = locked[sname]
+        rank  = s["choices"].index(proj) + 1 if proj in s["choices"] else None
+        assignments[sname] = {"project": proj, "rank": rank}
+        groups.setdefault(proj, [])
+        if sname not in groups[proj]:
+            groups[proj].append(sname)
+            groups[proj].sort()
+
+    rank_counts: dict = {}
+    unranked_count = 0
+    for info in assignments.values():
+        r = info["rank"]
+        if r is not None:
+            rank_counts[str(r)] = rank_counts.get(str(r), 0) + 1
+        else:
+            unranked_count += 1
+
+    total_score = sum(
+        scores[s["name"]][assignments[s["name"]]["project"]]
+        for s in all_students
+        if s["name"] in assignments
+    )
+    result["stats"] = {
+        "total_students":  len(all_students),
+        "rank_counts":     rank_counts,
+        "unranked_count":  unranked_count,
+        "objective_value": round(total_score, 2),
+        "technique":       technique,
+        "technique_label": SUPPORTED_TECHNIQUES[technique],
+    }
+    return result
+
+
+def optimize_assignments(
+    students: list,
+    constraints: dict,
+    technique: str = "linear_programming",
+    locked: dict | None = None,
+) -> dict:
+    """
+    Assign each student to exactly one capstone project to maximize total preference score.
+
+    Scoring:
+        Rank 1 (top choice) → N points  (N = max choices any student submitted)
+        Rank 2              → N-1 points
+        ...
+        Rank N              → 1 point
+        Unranked project    → 0 points
+
+    Args:
+        students    : list of {"name": str, "choices": [str, ...]}  (ordered preference)
+        constraints : {"Project Name": {"min": int, "max": int}, ...}
+        technique   : "linear_programming" | "brute_force" | "genetic_algorithm"
+        locked      : optional {"Student Name": "Project Name"} — pre-fixed assignments
+                      honored before the optimizer runs on remaining students
+
+    Returns:
+        dict with keys: assignments, project_groups, stats
+        or dict with key: error (on infeasibility)
+    """
+    if technique not in SUPPORTED_TECHNIQUES:
+        supported = ", ".join(SUPPORTED_TECHNIQUES.values())
+        return {
+            "error": (
+                f"The backend currently supports: {supported}. "
+                f"Requested technique '{technique}' is not available."
+            )
+        }
+
+    locked = locked or {}
+    all_projects = list(constraints.keys())
+    n_choices = max((len(s["choices"]) for s in students), default=6)
+    scores = _build_scores(students, all_projects, n_choices)
+
+    # Fast pre-check: total max must accommodate every student.
+    total_max = sum(c.get("max", len(students)) for c in constraints.values())
+    if total_max < len(students):
+        return {
+            "error": (
+                f"Total maximum seats across all projects ({total_max}) is less than "
+                f"the number of students ({len(students)}). "
+                "Raise the maximum seat counts before running."
+            )
+        }
+
+    # Drop stale locked entries for students not in the current roster.
+    student_names = {s["name"] for s in students}
+    locked = {k: v for k, v in locked.items() if k in student_names}
+
+    locked_students = [s for s in students if s["name"] in locked]
+    free_students   = [s for s in students if s["name"] not in locked]
+
+    if locked_students:
+        for sname, proj in locked.items():
+            if proj not in constraints:
+                return {
+                    "error": (
+                        f"Locked assignment for '{sname}' references unknown "
+                        f"project '{proj}'."
+                    )
+                }
+
+        locked_counts: dict = {}
+        for proj in locked.values():
+            locked_counts[proj] = locked_counts.get(proj, 0) + 1
+
+        free_constraints: dict = {}
+        for proj, limits in constraints.items():
+            lc       = locked_counts.get(proj, 0)
+            orig_max = limits.get("max", len(students))
+            new_min  = max(0, limits.get("min", 0) - lc)
+            new_max  = orig_max - lc
+            if new_max < 0:
+                return {
+                    "error": (
+                        f"Project '{proj}' has {lc} locked student(s) but its "
+                        f"max capacity is {orig_max}. Raise the max or unlock a student."
+                    )
+                }
+            free_constraints[proj] = {"min": new_min, "max": new_max}
+    else:
+        free_constraints = constraints
+
+    if not free_students:
+        result = _build_result([], [], all_projects, scores, technique)
+        return _merge_locked_result(
+            result, locked_students, locked, students, scores, technique
+        )
+
+    if technique == "brute_force":
+        result = _solve_brute_force(free_students, free_constraints, scores, all_projects)
+    elif technique == "genetic_algorithm":
+        result = _solve_genetic(free_students, free_constraints, scores, all_projects)
+    else:
+        result = _solve_lp(free_students, free_constraints, scores, all_projects)
+
+    if "error" in result:
+        return result
+
+    if locked_students:
+        result = _merge_locked_result(
+            result, locked_students, locked, students, scores, technique
+        )
+
     return result
