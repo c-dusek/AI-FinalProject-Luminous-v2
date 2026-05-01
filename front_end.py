@@ -1,3 +1,5 @@
+"""Tkinter desktop interface for the Capstone Project Matcher."""
+
 from __future__ import annotations
 
 import csv
@@ -76,6 +78,7 @@ def _safe_pos(v: str) -> int | None:
 
 
 def _clear(tree: ttk.Treeview) -> None:
+    """Remove every row from a Treeview widget."""
     tree.delete(*tree.get_children())
 
 
@@ -113,6 +116,7 @@ def _make_tree(
 
 
 def _sort_col(tree: ttk.Treeview, col: str, reverse: bool) -> None:
+    """Sort a Treeview column, preferring numeric ordering when possible."""
     rows = [(tree.set(r, col), r) for r in tree.get_children("")]
     try:
         rows.sort(
@@ -241,6 +245,7 @@ class _RankChart(tk.Canvas):
 # ── main application ──────────────────────────────────────────────────────────
 
 class CapstoneDesktopApp:
+    """Main desktop window and controller for the assignment workflow."""
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -396,6 +401,7 @@ class CapstoneDesktopApp:
         self._refresh_algo_info()
 
     def _refresh_algo_info(self) -> None:
+        """Keep the sidebar description synced with the selected algorithm."""
         label = self.technique_var.get()
         info  = _ALGO_INFO.get(label, "")
         self._algo_info_lbl.configure(text=info)
@@ -426,6 +432,8 @@ class CapstoneDesktopApp:
     # ── main 2×2 card grid ────────────────────────────────────────────────────
 
     def _build_main(self) -> None:
+        # The interface uses a 2x2 dashboard so inputs and results stay visible
+        # together without forcing the user through separate screens.
         main = ttk.Frame(self.root, padding=(14, 4, 14, 8))
         main.grid(row=1, column=1, sticky="nsew")
         main.columnconfigure(0, weight=5, minsize=360)
@@ -729,6 +737,8 @@ class CapstoneDesktopApp:
 
         fp = Path(path)
         try:
+            # utf-8-sig strips a BOM automatically, which is common in files
+            # exported from spreadsheet tools.
             content          = fp.read_text(encoding="utf-8-sig")
             students, projs  = parse_preferences(content)
         except Exception as exc:
@@ -759,6 +769,7 @@ class CapstoneDesktopApp:
         self._reset_stats()
 
     def _populate_preview(self) -> None:
+        """Show a quick preview of the first imported student rows."""
         _clear(self.preview_tree)
         for s in self.students[:50]:
             self.preview_tree.insert(
@@ -833,6 +844,7 @@ class CapstoneDesktopApp:
     # ── constraint gathering & validation ────────────────────────────────────
 
     def _gather_constraints(self) -> dict[str, dict[str, int]] | None:
+        """Read seat limits from the form and stop on the first invalid row."""
         out: dict[str, dict[str, int]] = {}
         for proj, d in self.project_inputs.items():
             mn = _safe_nn(d["min"].get())
@@ -903,6 +915,8 @@ class CapstoneDesktopApp:
         self.status_var.set("Optimizer running …")
         self._start_spinner()
 
+        # Run the optimizer off the Tk event loop so the window remains
+        # responsive while CBC or the heuristic solvers are working.
         threading.Thread(
             target=self._do_optimize,
             args=(self.students[:], constraints, technique_key,
@@ -917,15 +931,19 @@ class CapstoneDesktopApp:
         technique: str,
         locked: dict,
     ) -> None:
+        """Execute the selected algorithm in a worker thread."""
         try:
             result = optimize_assignments(
                 students, constraints, technique=technique, locked=locked,
             )
         except Exception as exc:
             result = {"error": str(exc)}
+        # Tk widgets must be updated on the main thread, so hand the result back
+        # through the event loop instead of touching widgets directly here.
         self.root.after(0, self._on_optimize_done, result)
 
     def _on_optimize_done(self, result: dict) -> None:
+        """Restore UI state and either surface an error or render results."""
         self._running = False
         self._stop_spinner()
         self._run_btn.configure(state="normal", text="▶  Run Assignment")
@@ -961,72 +979,11 @@ class CapstoneDesktopApp:
 
     # ── lock / unlock assignments ─────────────────────────────────────────────
 
-    def _right_click_assign(self, event: tk.Event) -> None:
-        row = self.assign_tree.identify_row(event.y)
-        if not row:
-            return
-        self.assign_tree.selection_set(row)
-        sname = self.assign_tree.set(row, "student")
-        proj  = self.assign_tree.set(row, "project")
-
-        menu = tk.Menu(self.root, tearoff=False)
-        if sname in self.locked_assignments:
-            menu.add_command(
-                label=f"Unlock  '{sname}'",
-                command=lambda: self._unlock_assignment(sname),
-            )
-        else:
-            menu.add_command(
-                label=f"Lock  '{sname}'  →  {proj}",
-                command=lambda: self._lock_assignment(sname, proj),
-            )
-        if self.locked_assignments:
-            menu.add_separator()
-            menu.add_command(label="Clear all locks", command=self._clear_locks)
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-
-    def _lock_assignment(self, sname: str, proj: str) -> None:
-        self.locked_assignments[sname] = proj
-        self._update_lock_button()
-        self._refresh_assignments_display()
-        n = len(self.locked_assignments)
-        self.status_var.set(
-            f"Locked {sname} → {proj}.  "
-            f"{n} lock(s) active — will be honored on next Run."
-        )
-
-    def _unlock_assignment(self, sname: str) -> None:
-        self.locked_assignments.pop(sname, None)
-        self._update_lock_button()
-        self._refresh_assignments_display()
-        n = len(self.locked_assignments)
-        self.status_var.set(
-            f"Unlocked {sname}.  {n} lock(s) remaining." if n
-            else f"Unlocked {sname}."
-        )
-
-    def _clear_locks(self) -> None:
-        self.locked_assignments.clear()
-        self._update_lock_button()
-        self._refresh_assignments_display()
-        self.status_var.set("All locks cleared.")
-
-    def _update_lock_button(self) -> None:
-        n = len(self.locked_assignments)
-        if n:
-            self._clear_locks_btn.configure(text=f"Clear locks ({n})")
-            self._clear_locks_btn.grid()
-        else:
-            self._clear_locks_btn.grid_remove()
-
-    def _refresh_assignments_display(self) -> None:
-        if not self.last_result:
-            return
-        assignments = self.last_result.get("assignments", {})
-        stats       = self.last_result.get("stats", {})
+    def _render_results(self, result: dict) -> None:
+        """Push a solver result into the assignments, groups, and stats views."""
+        assignments = result.get("assignments", {})
+        groups      = result.get("project_groups", {})
+        stats       = result.get("stats", {})
 
         _clear(self.assign_tree)
         for sname in sorted(assignments):
@@ -1107,6 +1064,7 @@ class CapstoneDesktopApp:
         )
 
     def _reset_stats(self) -> None:
+        """Clear the results area when nothing has been computed yet."""
         for attr in ("_stat_total", "_stat_first", "_stat_top3", "_stat_outside"):
             getattr(self, attr).configure(text="—")
         self._rank_chart.draw({}, 0, 0)
@@ -1133,7 +1091,8 @@ class CapstoneDesktopApp:
         stats       = self.last_result.get("stats", {})
         with Path(path).open("w", encoding="utf-8", newline="") as fh:
             w = csv.writer(fh)
-            # metadata header
+            # Include a short metadata block so exported files preserve the
+            # algorithm choice and objective score that produced them.
             w.writerow(["# Algorithm", stats.get("technique_label", "")])
             w.writerow(["# Objective score", stats.get("objective_value", "")])
             w.writerow(["# Total students", stats.get("total_students", "")])
@@ -1151,6 +1110,7 @@ class CapstoneDesktopApp:
         self.status_var.set(f"Exported assignments → {Path(path).name}")
 
     def _export_groups(self) -> None:
+        """Export one row per project with member names collapsed into a cell."""
         if not self.last_result:
             messagebox.showinfo("No results", "Run the optimizer before exporting.")
             return
@@ -1177,6 +1137,7 @@ class CapstoneDesktopApp:
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
+    """Create and run the desktop application."""
     root = tk.Tk()
     CapstoneDesktopApp(root)
     root.mainloop()

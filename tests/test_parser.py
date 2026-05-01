@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from parser_module import parse_preferences
 
 
+# Keep the parser fixtures small so each test targets one input variation.
 BASIC_CSV = """Name,Choice1,Choice2,Choice3
 Alice,Alpha,Beta,Gamma
 Bob,Beta,Alpha,Delta
